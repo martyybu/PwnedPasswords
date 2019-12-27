@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Pwnage;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
@@ -21,15 +22,18 @@ namespace Pwned
 
         private void CheckPasswordBtn_Click(object sender, EventArgs e)
         {
-            if (PwnedPasswords.CheckPassword(PasswordTextBox.Text).passwordCompromised)
+            var t = Task.Run(() => PwnedPasswords.CheckPasswordAsync(PasswordTextBox.Text));
+            t.Wait();
+
+            if (!t.Result.passwordCompromised)
             {
                 ErrorLabel.Visible = true;
-                ErrorLabel.Text = "THIS PASSWORD IS COMPROMISED! TIMES: " + PwnedPasswords.CheckPassword(PasswordTextBox.Text).breachCount;
+                ErrorLabel.Text = "THIS PASSWORD HAS NEVER BEEN COMPROMISED! TIMES: " + t.Result.breachCount;
             }
             else
             {
-                ErrorLabel.Visible = false;
-                ErrorLabel.Text = "THIS PASSWORD HAS NEVER BEEN COMPROMISED! TIMES: " + PwnedPasswords.CheckPassword(PasswordTextBox.Text).breachCount;
+                ErrorLabel.Visible = true;
+                ErrorLabel.Text = "THIS PASSWORD IS COMPROMISED! TIMES: " + t.Result.breachCount;
             }
         }
     }

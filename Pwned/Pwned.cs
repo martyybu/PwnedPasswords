@@ -1,17 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Pwned
+namespace Pwnage
 {
-    public class PwnedPasswords
+    public static class PwnedPasswords
     {
-        private static readonly HttpClient _httpClient = new HttpClient();
-        private static readonly Dictionary<string, int> _emptyDictionary = new Dictionary<string, int>();
+        private static readonly IReadOnlyDictionary<string, int> _emptyDictionary = new Dictionary<string, int>();
         private static readonly char[] _newLines = new[] { '\n', '\r' };
         private static readonly char[] _colon = new[] { ':' };
 
@@ -20,7 +18,7 @@ namespace Pwned
         /// </summary>
         /// <param name="password"></param>
         /// <returns></returns>
-        public static (bool passwordCompromised, int breachCount) CheckPassword(string password)
+        public static async Task<(bool passwordCompromised, int breachCount)> CheckPasswordAsync(string password)
         {
             // SHA1 hash the password and return the bytes as a hex string
             var passwordHashString = SHA1HashPassword(password);
@@ -32,14 +30,16 @@ namespace Pwned
             //   Pwned Passwords.
             var hashPrefix = passwordHashString.Substring(startIndex: 0, length: 5);
             var hashSuffix = passwordHashString.Substring(startIndex: 5, length: 35);
+            var candidatePasswordHashSuffixes = await GetCandidatePasswordHashSuffixesAsync(hashPrefix);
 
-            if (!(GetCandidatePasswordHashSuffixes(hashPrefix)).TryGetValue(hashSuffix, out int breachCount))
+            if (candidatePasswordHashSuffixes.TryGetValue(hashSuffix, out int breachCount))
             {
-                // The password has not been in any data breaches tracked by Pwned Passwords.
-                return (false, 0);
+                // The password has been in at least one data breach! Uh oh!
+                return (true, breachCount);
             }
-            // The password has been in at least one data breach! Uh oh!
-            return (true, breachCount);
+
+            // The password has not been in any data breaches tracked by Pwned Passwords.
+            return (false, 0);
         }
 
         /// <summary>
@@ -49,13 +49,11 @@ namespace Pwned
         /// <returns></returns>
         private static string SHA1HashPassword(string password)
         {
-            using (var sha1 = SHA1.Create())
-            {
-                var passwordBytes = Encoding.UTF8.GetBytes(password);
-                var passwordHashBytes = sha1.ComputeHash(passwordBytes);
+            using var sha1 = SHA1.Create();
+            var passwordBytes = Encoding.UTF8.GetBytes(password);
+            var passwordHashBytes = sha1.ComputeHash(passwordBytes);
 
-                return BitConverter.ToString(passwordHashBytes).Replace("-", "");
-            }
+            return BitConverter.ToString(passwordHashBytes).Replace("-", "");
         }
 
         /// <summary>
@@ -63,45 +61,46 @@ namespace Pwned
         /// </summary>
         /// <param name="hashPrefix"></param>
         /// <returns></returns>
-        private static Dictionary<string, int> GetCandidatePasswordHashSuffixes(string hashPrefix)
+        private static async Task<IReadOnlyDictionary<string, int>> GetCandidatePasswordHashSuffixesAsync(string hashPrefix)
         {
-            using (var response = _httpClient.GetAsync($"https://api.pwnedpasswords.com/range/{hashPrefix}").Result)
+            var handler = new WebRequestHandler();
+            handler.ReadWriteTimeout = 5000;
+            using HttpClient HTTPClient = new HttpClient(handler);
+            using var response = await HTTPClient.GetAsync($"https://api.pwnedpasswords.com/range/{hashPrefix}");
+            if (!response.IsSuccessStatusCode)
             {
-                if (!response.IsSuccessStatusCode)
-                {
-                    // Request was not successful. Don't crash the calling app; act like nothing was returned.
-                    return _emptyDictionary;
-                }
-
-                var responseBody = response.Content.ReadAsStringAsync().Result;
-
-                // Split the response into lines. Each line contains a password hash suffix (35 characters) and
-                //   the number of times that password has been seen in breaches, separated by a colon (":").
-                var lines = responseBody.Split(_newLines, StringSplitOptions.RemoveEmptyEntries);
-
-                var pwnedPasswordInfos = new Dictionary<string, int>(lines.Length);
-
-                foreach (var line in lines)
-                {
-                    var lineSplit = line.Split(_colon, StringSplitOptions.RemoveEmptyEntries);
-                    if (lineSplit.Length != 2)
-                    {
-                        // Invalid data from API.
-                        continue;
-                    }
-
-                    if (!int.TryParse(lineSplit[1], out int breachCount))
-                    {
-                        // Invalid breach count from API.
-                        continue;
-                    }
-
-                    // Key: hash suffix; value: breach count.
-                    pwnedPasswordInfos[lineSplit[0]] = breachCount;
-                }
-
-                return pwnedPasswordInfos;
+                // Request was not successful. Don't crash the calling app; act like nothing was returned.
+                return _emptyDictionary;
             }
+
+            var responseBody = await response.Content.ReadAsStringAsync();
+
+            // Split the response into lines. Each line contains a password hash suffix (35 characters) and
+            //   the number of times that password has been seen in breaches, separated by a colon (":").
+            var lines = responseBody.Split(_newLines, StringSplitOptions.RemoveEmptyEntries);
+
+            var pwnedPasswordInfos = new Dictionary<string, int>(lines.Length);
+
+            foreach (var line in lines)
+            {
+                var lineSplit = line.Split(_colon, StringSplitOptions.RemoveEmptyEntries);
+                if (lineSplit.Length != 2)
+                {
+                    // Invalid data from API.
+                    continue;
+                }
+
+                if (!int.TryParse(lineSplit[1], out int breachCount))
+                {
+                    // Invalid breach count from API.
+                    continue;
+                }
+
+                // Key: hash suffix; value: breach count.
+                pwnedPasswordInfos[lineSplit[0]] = breachCount;
+            }
+
+            return pwnedPasswordInfos;
         }
     }
 }
